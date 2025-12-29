@@ -4,107 +4,90 @@ const FormData = require("form-data");
 exports.handler = async (event) => {
   try {
     const { model, prompt, images } = JSON.parse(event.body);
-    const apiKey = process.env.FAL_KEY;
 
-    if (!apiKey) {
-      return { statusCode: 500, body: "FAL_KEY missing" };
+    if (!process.env.FAL_KEY) {
+      return error("FAL_KEY missing");
     }
 
-    // ===============================
-    // 1️⃣ Upload reference images
-    // ===============================
-    const uploadedImages = [];
+    if (!images || !images.length) {
+      return error("Reference images required");
+    }
+
+    // Upload images to fal.ai
+    const uploaded = [];
 
     for (const img of images) {
-      const buffer = Buffer.from(img.data, "base64");
-
       const form = new FormData();
-      form.append("file", buffer, {
+      form.append("file", Buffer.from(img.data, "base64"), {
         filename: img.name,
-        contentType: img.type,
+        contentType: img.type
       });
 
       const uploadRes = await fetch(
         "https://fal.run/fal-ai/files/upload",
         {
           method: "POST",
-          headers: {
-            Authorization: `Key ${apiKey}`,
-            ...form.getHeaders(),
-          },
-          body: form,
+          headers: { Authorization: `Key ${process.env.FAL_KEY}` },
+          body: form
         }
       );
 
       if (!uploadRes.ok) {
-        const err = await uploadRes.text();
-        throw new Error(`Upload failed: ${err}`);
+        const txt = await uploadRes.text();
+        return error("Image upload failed: " + txt);
       }
 
       const uploadJson = await uploadRes.json();
-      uploadedImages.push(uploadJson.file_id);
+      uploaded.push(uploadJson.url);
     }
 
-    // ===============================
-    // 2️⃣ Create generation request
-    // ===============================
-    const createRes = await fetch(
-      `https://queue.fal.run/${model}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          prompt,
-          images: uploadedImages,
-        }),
-      }
-    );
+    // Send generation request
+    const genRes = await fetch(`https://queue.fal.run/${model}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Key ${process.env.FAL_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt,
+        image_urls: uploaded
+      })
+    });
 
-    if (!createRes.ok) {
-      const err = await createRes.text();
-      throw new Error(`Create failed: ${err}`);
+    if (!genRes.ok) {
+      return error("Generation request failed");
     }
 
-    const { request_id } = await createRes.json();
+    const gen = await genRes.json();
 
-    // ===============================
-    // 3️⃣ Poll for result
-    // ===============================
+    // Poll result
+    let status;
     for (let i = 0; i < 120; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise(r => setTimeout(r, 5000));
 
-      const pollRes = await fetch(
-        `https://queue.fal.run/${model}/requests/${request_id}`,
-        {
-          headers: {
-            Authorization: `Key ${apiKey}`,
-          },
-        }
+      const s = await fetch(
+        `https://queue.fal.run/${model}/requests/${gen.request_id}`,
+        { headers: { Authorization: `Key ${process.env.FAL_KEY}` } }
       );
 
-      const pollJson = await pollRes.json();
-
-      if (pollJson.status === "completed") {
-        return {
-          statusCode: 200,
-          body: JSON.stringify(pollJson),
-        };
-      }
-
-      if (pollJson.status === "failed") {
-        throw new Error(JSON.stringify(pollJson));
-      }
+      status = await s.json();
+      if (status.status === "COMPLETED") break;
+      if (status.status === "FAILED") return error("Generation failed");
     }
 
-    throw new Error("Timeout waiting for result");
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ images: status.images.map(i => i.url) })
+    };
 
   } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
-    };
+    return error(err.message);
   }
 };
+
+function error(msg) {
+  return {
+    statusCode: 400,
+    body: JSON.stringify({ error: msg })
+  };
+}

@@ -1,9 +1,2 @@
-[functions]
-node_bundler = "esbuild"
-
-[[headers]]
-for = "/.netlify/functions/*"
-  [headers.values]
-  Access-Control-Allow-Origin = "*"
-  Access-Control-Allow-Headers = "*"
-  Access-Control-Allow-Methods = "POST, OPTIONS"
+[build]
+  functions = "netlify/functions"
