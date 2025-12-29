@@ -9,7 +9,7 @@ exports.handler = async (event) => {
       throw new Error("FAL_KEY missing");
     }
 
-    if (!images || !images.length) {
+    if (!images || images.length === 0) {
       throw new Error("Reference images required");
     }
 
@@ -17,10 +17,6 @@ exports.handler = async (event) => {
 
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-
-      if (!img.data) {
-        throw new Error(`Invalid image at index ${i}`);
-      }
 
       const buffer = Buffer.from(img.data, "base64");
 
@@ -35,19 +31,20 @@ exports.handler = async (event) => {
         {
           method: "POST",
           headers: {
-            Authorization: `Key ${process.env.FAL_KEY}`
+            Authorization: `Key ${process.env.FAL_KEY}`,
+            ...form.getHeaders() // 🔥 THIS IS THE FIX
           },
           body: form
         }
       );
 
       if (!upload.ok) {
-        const t = await upload.text();
-        throw new Error("Image upload failed: " + t);
+        const text = await upload.text();
+        throw new Error(`Image upload failed: ${text}`);
       }
 
-      const up = await upload.json();
-      uploadedUrls.push(up.url);
+      const result = await upload.json();
+      uploadedUrls.push(result.url);
     }
 
     const gen = await fetch(`https://queue.fal.run/${model}`, {
@@ -64,23 +61,29 @@ exports.handler = async (event) => {
 
     const job = await gen.json();
 
-    let result;
+    let output;
     for (let i = 0; i < 120; i++) {
       await new Promise(r => setTimeout(r, 5000));
+
       const poll = await fetch(
         `https://queue.fal.run/${model}/requests/${job.request_id}`,
         {
-          headers: { Authorization: `Key ${process.env.FAL_KEY}` }
+          headers: {
+            Authorization: `Key ${process.env.FAL_KEY}`
+          }
         }
       );
-      result = await poll.json();
-      if (result.status === "COMPLETED") break;
-      if (result.status === "FAILED") throw new Error("Generation failed");
+
+      output = await poll.json();
+      if (output.status === "COMPLETED") break;
+      if (output.status === "FAILED") {
+        throw new Error("Generation failed");
+      }
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ images: result.images })
+      body: JSON.stringify(output)
     };
 
   } catch (err) {
