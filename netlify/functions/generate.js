@@ -3,45 +3,60 @@ const FormData = require("form-data");
 
 exports.handler = async (event) => {
   try {
-    const { model, prompt, images } = JSON.parse(event.body);
+    const body = JSON.parse(event.body);
+    const { model, prompt, images } = body;
 
     if (!process.env.FAL_KEY) {
-      return error("FAL_KEY missing");
+      return fail("FAL_KEY missing");
     }
 
-    if (!images || !images.length) {
-      return error("Reference images required");
+    if (!Array.isArray(images) || images.length === 0) {
+      return fail("Reference images are required");
     }
 
-    // Upload images to fal.ai
-    const uploaded = [];
+    const uploadedUrls = [];
 
-    for (const img of images) {
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+
+      // 🔐 HARD VALIDATION (THIS FIXES YOUR ERROR)
+      if (
+        !img ||
+        typeof img.data !== "string" ||
+        img.data.length === 0
+      ) {
+        return fail(`Invalid image data at index ${i}`);
+      }
+
+      const buffer = Buffer.from(img.data, "base64");
+
       const form = new FormData();
-      form.append("file", Buffer.from(img.data, "base64"), {
-        filename: img.name,
-        contentType: img.type
+      form.append("file", buffer, {
+        filename: img.name || `image_${i}.png`,
+        contentType: img.type || "image/png"
       });
 
       const uploadRes = await fetch(
         "https://fal.run/fal-ai/files/upload",
         {
           method: "POST",
-          headers: { Authorization: `Key ${process.env.FAL_KEY}` },
+          headers: {
+            Authorization: `Key ${process.env.FAL_KEY}`
+          },
           body: form
         }
       );
 
       if (!uploadRes.ok) {
-        const txt = await uploadRes.text();
-        return error("Image upload failed: " + txt);
+        const errText = await uploadRes.text();
+        return fail("Image upload failed: " + errText);
       }
 
       const uploadJson = await uploadRes.json();
-      uploaded.push(uploadJson.url);
+      uploadedUrls.push(uploadJson.url);
     }
 
-    // Send generation request
+    // 🚀 Start generation
     const genRes = await fetch(`https://queue.fal.run/${model}`, {
       method: "POST",
       headers: {
@@ -50,44 +65,58 @@ exports.handler = async (event) => {
       },
       body: JSON.stringify({
         prompt,
-        image_urls: uploaded
+        image_urls: uploadedUrls
       })
     });
 
     if (!genRes.ok) {
-      return error("Generation request failed");
+      const t = await genRes.text();
+      return fail("Generation request failed: " + t);
     }
 
     const gen = await genRes.json();
 
-    // Poll result
-    let status;
+    // ⏳ Polling
+    let result;
     for (let i = 0; i < 120; i++) {
-      await new Promise(r => setTimeout(r, 5000));
+      await sleep(5000);
 
-      const s = await fetch(
+      const poll = await fetch(
         `https://queue.fal.run/${model}/requests/${gen.request_id}`,
-        { headers: { Authorization: `Key ${process.env.FAL_KEY}` } }
+        {
+          headers: {
+            Authorization: `Key ${process.env.FAL_KEY}`
+          }
+        }
       );
 
-      status = await s.json();
-      if (status.status === "COMPLETED") break;
-      if (status.status === "FAILED") return error("Generation failed");
+      result = await poll.json();
+
+      if (result.status === "COMPLETED") break;
+      if (result.status === "FAILED") {
+        return fail("Generation failed");
+      }
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ images: status.images.map(i => i.url) })
+      body: JSON.stringify({
+        images: result.images.map(i => i.url)
+      })
     };
 
   } catch (err) {
-    return error(err.message);
+    return fail(err.message);
   }
 };
 
-function error(msg) {
+function fail(msg) {
   return {
     statusCode: 400,
     body: JSON.stringify({ error: msg })
   };
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
 }
