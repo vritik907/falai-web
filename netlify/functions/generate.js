@@ -1,12 +1,41 @@
 // netlify/functions/generate.js
 exports.handler = async (event) => {
+  // Add CORS headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json'
+  };
+
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+    return { 
+      statusCode: 405, 
+      headers,
+      body: JSON.stringify({ error: 'Method Not Allowed' })
+    };
   }
 
   try {
+    console.log('FAL_KEY present:', !!process.env.FAL_KEY);
+    
     const { prompt, model, image_size, image_files } = JSON.parse(event.body);
     
+    console.log('Request details:', { prompt, model, image_size, hasImages: image_files?.length > 0 });
+
+    if (!process.env.FAL_KEY) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ error: 'FAL_KEY not configured in environment variables' })
+      };
+    }
+
     // Build the request payload
     const payload = {
       prompt,
@@ -22,6 +51,8 @@ exports.handler = async (event) => {
       payload.image_url = `data:image/png;base64,${image_files[0].base64}`;
     }
 
+    console.log('Calling fal.ai API:', `https://queue.fal.run/${model}`);
+
     const response = await fetch(`https://queue.fal.run/${model}`, {
       method: 'POST',
       headers: {
@@ -31,27 +62,38 @@ exports.handler = async (event) => {
       body: JSON.stringify(payload)
     });
 
+    const responseText = await response.text();
+    console.log('fal.ai response status:', response.status);
+    console.log('fal.ai response:', responseText.substring(0, 500));
+
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('fal.ai error:', errorText);
+      console.error('fal.ai error:', responseText);
       return {
         statusCode: response.status,
-        body: JSON.stringify({ error: `fal.ai API error: ${errorText}` })
+        headers,
+        body: JSON.stringify({ 
+          error: `fal.ai API error: ${response.status}`,
+          details: responseText
+        })
       };
     }
 
-    const data = await response.json();
+    const data = JSON.parse(responseText);
     
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(data)
     };
   } catch (error) {
     console.error('Generate function error:', error);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: error.message })
+      headers,
+      body: JSON.stringify({ 
+        error: error.message,
+        stack: error.stack 
+      })
     };
   }
 };
