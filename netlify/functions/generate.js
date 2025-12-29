@@ -1,31 +1,31 @@
-export default async (req) => {
+import fetch from "node-fetch";
+import FormData from "form-data";
+
+export const handler = async (event) => {
   try {
-    if (req.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: "Method not allowed" };
     }
 
-    const { model, prompt, images, image_size } = await req.json();
+    const { model, prompt, images, image_size } = JSON.parse(event.body);
 
     if (!model || !prompt || !images?.length) {
-      return new Response(
-        JSON.stringify({ error: "Missing model, prompt, or images" }),
-        { status: 400 }
-      );
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "Missing inputs" }),
+      };
     }
 
     const apiKey = process.env.FAL_KEY;
     if (!apiKey) {
-      return new Response(
-        JSON.stringify({ error: "FAL_KEY not set" }),
-        { status: 500 }
-      );
+      throw new Error("FAL_KEY missing");
     }
 
-    /* ----------------------------------
+    /* ------------------------------------
        1️⃣ Upload images to fal.ai
-    ---------------------------------- */
+    ------------------------------------ */
 
-    const uploadedImages = [];
+    const uploadedUrls = [];
 
     for (const img of images) {
       const form = new FormData();
@@ -35,7 +35,7 @@ export default async (req) => {
         img.name
       );
 
-      const uploadRes = await fetch(
+      const upload = await fetch(
         "https://fal.run/fal-ai/files/upload",
         {
           method: "POST",
@@ -46,20 +46,20 @@ export default async (req) => {
         }
       );
 
-      if (!uploadRes.ok) {
-        const t = await uploadRes.text();
-        throw new Error("Image upload failed: " + t);
+      if (!upload.ok) {
+        const t = await upload.text();
+        throw new Error("Upload failed: " + t);
       }
 
-      const uploaded = await uploadRes.json();
-      uploadedImages.push(uploaded.url);
+      const uploaded = await upload.json();
+      uploadedUrls.push(uploaded.url);
     }
 
-    /* ----------------------------------
-       2️⃣ Create generation request
-    ---------------------------------- */
+    /* ------------------------------------
+       2️⃣ Create generation job
+    ------------------------------------ */
 
-    const genRes = await fetch(
+    const create = await fetch(
       `https://queue.fal.run/${model}`,
       {
         method: "POST",
@@ -70,26 +70,26 @@ export default async (req) => {
         body: JSON.stringify({
           prompt,
           image_size,
-          images: uploadedImages,
+          images: uploadedUrls,
         }),
       }
     );
 
-    if (!genRes.ok) {
-      const t = await genRes.text();
-      throw new Error("Generate API error: " + t);
+    if (!create.ok) {
+      const t = await create.text();
+      throw new Error("Generate failed: " + t);
     }
 
-    const { request_id } = await genRes.json();
+    const { request_id } = await create.json();
 
-    /* ----------------------------------
-       3️⃣ Poll status
-    ---------------------------------- */
+    /* ------------------------------------
+       3️⃣ Poll result
+    ------------------------------------ */
 
     for (let i = 0; i < 120; i++) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2000));
 
-      const statusRes = await fetch(
+      const poll = await fetch(
         `https://queue.fal.run/${model}/requests/${request_id}`,
         {
           headers: {
@@ -98,27 +98,27 @@ export default async (req) => {
         }
       );
 
-      const status = await statusRes.json();
+      const status = await poll.json();
 
       if (status.status === "FAILED") {
-        throw new Error(status.error || "fal.ai FAILED");
+        throw new Error(status.error || "Generation failed");
       }
 
       if (status.status === "COMPLETED") {
-        return new Response(
-          JSON.stringify(status.response),
-          { status: 200 }
-        );
+        return {
+          statusCode: 200,
+          body: JSON.stringify(status.response),
+        };
       }
     }
 
     throw new Error("Timeout waiting for result");
 
   } catch (err) {
-    console.error("❌ GENERATE ERROR:", err);
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500 }
-    );
+    console.error("❌ ERROR:", err.message);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: err.message }),
+    };
   }
 };
