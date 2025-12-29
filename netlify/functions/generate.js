@@ -1,4 +1,8 @@
 // netlify/functions/generate.js
+
+// Use native fetch or fallback to node-fetch
+const fetch = globalThis.fetch || require('node-fetch');
+
 exports.handler = async (event) => {
   // Add CORS headers
   const headers = {
