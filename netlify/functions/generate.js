@@ -1,148 +1,105 @@
-import Busboy from "busboy";
-import FormData from "form-data";
-import fetch from "node-fetch";
+async function generateOne(prompt, i) {
+  log("Generating: " + prompt);
 
-export async function handler(event) {
+  /* ===============================
+     STEP 1: CALL /api/generate
+  =============================== */
+  let res;
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method Not Allowed" };
+    const fd = new FormData();
+    fd.append("prompt", prompt);
+    fd.append("model", model.value);
+    fd.append("image_size", resolution.value);
+
+    // attach reference images
+    for (const f of refs) {
+      fd.append("images", f);
     }
 
-    const contentType =
-      event.headers["content-type"] || event.headers["Content-Type"];
-
-    if (!contentType || !contentType.includes("multipart/form-data")) {
-      return {
-        statusCode: 400,
-        body: "Expected multipart/form-data"
-      };
-    }
-
-    const busboy = Busboy({ headers: { "content-type": contentType } });
-
-    let prompt = "";
-    let model = "";
-    let imageSize = null;
-    const files = [];
-
-    await new Promise((resolve, reject) => {
-      busboy.on("field", (name, val) => {
-        if (name === "prompt") prompt = val;
-        if (name === "model") model = val;
-        if (name === "image_size") imageSize = val;
-      });
-
-      busboy.on("file", (name, file, info) => {
-        const chunks = [];
-        file.on("data", d => chunks.push(d));
-        file.on("end", () => {
-          files.push({
-            filename: info.filename,
-            mimeType: info.mimeType,
-            buffer: Buffer.concat(chunks)
-          });
-        });
-      });
-
-      busboy.on("finish", resolve);
-      busboy.on("error", reject);
-
-      const bodyBuffer = event.isBase64Encoded
-        ? Buffer.from(event.body, "base64")
-        : Buffer.from(event.body);
-
-      busboy.end(bodyBuffer);
+    res = await fetch("/api/generate", {
+      method: "POST",
+      body: fd
     });
-
-    if (!prompt || !model) {
-      return {
-        statusCode: 400,
-        body: "Missing prompt or model"
-      };
-    }
-
-    const payload = { prompt };
-
-    // ================== EDIT MODELS ==================
-    if (model.includes("edit")) {
-      if (files.length === 0) {
-        return {
-          statusCode: 400,
-          body: "Edit models require reference images"
-        };
-      }
-
-      const imageUrls = [];
-
-      for (const f of files) {
-        const form = new FormData();
-        form.append("file", f.buffer, {
-          filename: f.filename,
-          contentType: f.mimeType
-        });
-
-        const uploadRes = await fetch(
-          "https://fal.run/fal-ai/files/upload",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Key ${process.env.FAL_KEY}`,
-              ...form.getHeaders()
-            },
-            body: form
-          }
-        );
-
-        if (!uploadRes.ok) {
-          const t = await uploadRes.text();
-          return {
-            statusCode: 500,
-            body: "fal.ai upload failed: " + t
-          };
-        }
-
-        const uploadData = await uploadRes.json();
-        imageUrls.push(uploadData.file_url || uploadData.url);
-      }
-
-      payload.image_urls = imageUrls;
-    } 
-    // ================== TEXT TO IMAGE ==================
-    else {
-      if (imageSize) payload.image_size = imageSize;
-    }
-
-    const genRes = await fetch(
-      `https://queue.fal.run/${model}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${process.env.FAL_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      }
-    );
-
-    if (!genRes.ok) {
-      const t = await genRes.text();
-      return { statusCode: genRes.status, body: t };
-    }
-
-    const data = await genRes.json();
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify(data)
-    };
-
-  } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({
-        error: err.message,
-        stack: err.stack
-      })
-    };
+  } catch (e) {
+    throw new Error("Generate request failed (network)");
   }
+
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error("Generate API error: " + t);
+  }
+
+  const data = await res.json();
+  if (!data.request_id) {
+    throw new Error("fal.ai did not return request_id");
+  }
+
+  const requestId = data.request_id;
+
+  /* ===============================
+     STEP 2: POLL /api/status SAFELY
+  =============================== */
+  const maxAttempts = 120;     // ~10 minutes
+  const pollDelay = 5000;      // 5 seconds
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await new Promise(r => setTimeout(r, pollDelay));
+
+    let statusRes;
+    try {
+      statusRes = await fetch(
+        `/api/status?model=${encodeURIComponent(model.value)}&request_id=${requestId}`
+      );
+    } catch (e) {
+      log(`Status check failed (attempt ${attempt}), retrying...`, "error");
+      continue; // do NOT fail job
+    }
+
+    if (!statusRes.ok) {
+      log(`Status API HTTP ${statusRes.status}, retrying...`, "error");
+      continue;
+    }
+
+    const j = await statusRes.json();
+
+    if (j.status === "FAILED") {
+      throw new Error(j.error || "fal.ai request FAILED");
+    }
+
+    if (j.status === "IN_QUEUE") {
+      log("In queue…");
+      continue;
+    }
+
+    if (j.status === "IN_PROGRESS") {
+      log("Processing…");
+      continue;
+    }
+
+    if (j.status === "COMPLETED") {
+      const out = j.response || j;
+      const url =
+        out.images?.[0]?.url ||
+        out.image?.url ||
+        out.output?.[0]?.url;
+
+      if (!url) {
+        throw new Error("No image URL returned");
+      }
+
+      gallerySection.style.display = "block";
+      gallery.innerHTML += `
+        <div class="gallery-item">
+          <img src="${url}">
+          <button class="download-btn" onclick="download('${url}', ${i})">⬇️</button>
+        </div>
+      `;
+
+      done++;
+      progressUpdate();
+      return;
+    }
+  }
+
+  throw new Error("Timeout waiting for fal.ai completion");
 }

@@ -305,7 +305,7 @@ async function generateOne(prompt,i){
 
     let out;
     while(true){
-        await new Promise(r=>setTimeout(r,2000));
+        await new Promise(r=>setTimeout(r,5000));
         const s=await fetch(`/api/status?model=${model.value}&request_id=${id}`);
         const j=await s.json();
         if(j.status==="FAILED") throw new Error("fal.ai request FAILED");
