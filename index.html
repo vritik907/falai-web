@@ -1,38 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>fal.ai Image Editor</title>
-<style>
-  body {
-    background: #0f0f1a;
-    color: #fff;
-    font-family: Arial, sans-serif;
-    padding: 30px;
-  }
-  textarea, input, button {
-    width: 100%;
-    margin-top: 10px;
-    padding: 10px;
-    border-radius: 6px;
-    border: none;
-  }
-  button {
-    background: linear-gradient(90deg,#3b82f6,#8b5cf6);
-    color: #fff;
-    font-weight: bold;
-    cursor: pointer;
-  }
-  .log {
-    margin-top: 20px;
-    background: #000;
-    padding: 15px;
-    font-family: monospace;
-    color: #00ff88;
-  }
-</style>
+  <meta charset="UTF-8" />
+  <title>fal.ai Image Edit</title>
+  <style>
+    body { background:#0b0d17; color:#fff; font-family:Arial; padding:30px }
+    textarea, input { width:100%; margin-top:10px; padding:10px }
+    button { margin-top:20px; padding:15px; width:100%; font-size:18px }
+    pre { background:black; padding:10px; margin-top:20px }
+  </style>
 </head>
-
 <body>
 
 <h2>fal.ai Image Edit (Reference Images Required)</h2>
@@ -41,52 +18,39 @@
 <input id="model" value="fal-ai/nano-banana-pro/edit" />
 
 <label>Reference Images (required)</label>
-<input id="images" type="file" accept="image/*" multiple />
+<input id="images" type="file" multiple accept="image/*" />
 
 <label>Prompt</label>
-<textarea id="prompt" rows="4">clone car</textarea>
+<textarea id="prompt">clone car</textarea>
 
 <button onclick="generate()">🚀 Generate</button>
 
-<div class="log" id="log"></div>
+<pre id="log"></pre>
 
 <script>
-function log(msg) {
-  document.getElementById("log").innerHTML += msg + "<br>";
-}
-
-async function filesToBase64(files) {
-  const out = [];
-  for (const file of files) {
-    const base64 = await new Promise((res, rej) => {
-      const reader = new FileReader();
-      reader.onload = () => res(reader.result.split(",")[1]);
-      reader.onerror = rej;
-      reader.readAsDataURL(file);
-    });
-    out.push({
-      name: file.name,
-      type: file.type,
-      data: base64
-    });
-  }
-  return out;
-}
-
 async function generate() {
-  document.getElementById("log").innerHTML = "";
-  log("Uploading & generating...");
-
-  const model = document.getElementById("model").value;
-  const prompt = document.getElementById("prompt").value;
   const files = document.getElementById("images").files;
+  const prompt = document.getElementById("prompt").value;
+  const model = document.getElementById("model").value;
+  const log = document.getElementById("log");
 
   if (!files.length) {
-    alert("Reference images are required");
+    alert("Reference images required");
     return;
   }
 
-  const images = await filesToBase64(files);
+  log.textContent = "Uploading & generating...\n";
+
+  const images = [];
+
+  for (const file of files) {
+    const base64 = await toBase64(file);
+    images.push({
+      name: file.name,
+      type: file.type,
+      data: base64.split(",")[1] // IMPORTANT
+    });
+  }
 
   const res = await fetch("/.netlify/functions/generate", {
     method: "POST",
@@ -94,22 +58,17 @@ async function generate() {
     body: JSON.stringify({ model, prompt, images })
   });
 
-  const data = await res.json();
+  const json = await res.json();
+  log.textContent += JSON.stringify(json, null, 2);
+}
 
-  if (data.error) {
-    log("❌ " + data.error);
-    return;
-  }
-
-  data.images.forEach(url => {
-    const img = document.createElement("img");
-    img.src = url;
-    img.style.width = "300px";
-    img.style.marginTop = "10px";
-    document.body.appendChild(img);
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
-
-  log("✅ Done");
 }
 </script>
 
