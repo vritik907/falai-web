@@ -40,22 +40,25 @@ exports.handler = async (event) => {
       };
     }
 
-    // Build the request payload
+    // Build the request payload based on the fal.ai API docs
     const payload = {
       prompt,
-      image_size: image_size || '1024',
-      num_inference_steps: 28,
-      guidance_scale: 3.5,
       num_images: 1,
-      enable_safety_checker: true
+      aspect_ratio: "auto",
+      output_format: "png",
+      resolution: image_size || "1K" // nano-banana-pro uses 1K, 2K, or 4K
     };
 
-    // Add reference images if provided
+    // Add reference images if provided (nano-banana-pro/edit requires image_urls array)
     if (image_files && image_files.length > 0) {
-      payload.image_url = `data:image/png;base64,${image_files[0].base64}`;
+      // Convert base64 to data URIs
+      payload.image_urls = image_files.map(
+        img => `data:image/png;base64,${img.base64}`
+      );
     }
 
     console.log('Calling fal.ai API:', `https://queue.fal.run/${model}`);
+    console.log('Payload:', JSON.stringify({...payload, image_urls: payload.image_urls ? `[${payload.image_urls.length} images]` : undefined}));
 
     const response = await fetch(`https://queue.fal.run/${model}`, {
       method: 'POST',

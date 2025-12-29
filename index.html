@@ -173,9 +173,9 @@ textarea{min-height:120px;font-family:monospace}
 <option value="9:16">9:16</option>
 </select>
 <select id="resolution">
-<option value="512">512</option>
-<option value="1024" selected>1024</option>
-<option value="2048">2048</option>
+<option value="1K" selected>1K (Fast)</option>
+<option value="2K">2K (Balanced)</option>
+<option value="4K">4K (High Quality)</option>
 </select>
 </div>
 </div>
@@ -189,7 +189,9 @@ textarea{min-height:120px;font-family:monospace}
 
 <div class="section">
 <div class="section-title">📝 Prompts (one per line)</div>
-<textarea id="prompts"></textarea>
+<textarea id="prompts" placeholder="cars on mountains
+sunset over ocean
+futuristic city"></textarea>
 </div>
 
 <button class="btn" id="generateBtn" onclick="generateImages()">🚀 Generate</button>
@@ -247,7 +249,7 @@ function progressUpdate(){
 
 async function generateImages(){
     const prompts=promptsEl.value.split("\n").map(x=>x.trim()).filter(Boolean);
-    if(!prompts.length) return alert("Add prompt");
+    if(!prompts.length) return alert("Add at least one prompt");
 
     if(model.value.includes("edit") && refs.length===0){
         alert("This model requires reference images");
@@ -265,7 +267,7 @@ async function generateImages(){
         try{
             await generateOne(prompts[i],i);
         }catch(err){
-            log(err.message);
+            log("❌ Error: "+err.message);
             done++; progressUpdate();
         }
     }
@@ -275,7 +277,7 @@ async function generateImages(){
 }
 
 async function generateOne(prompt,i){
-    log("Generating: "+prompt);
+    log("🔄 Generating: "+prompt);
 
     const imageFiles=[];
     for(const f of refs){
@@ -298,28 +300,54 @@ async function generateOne(prompt,i){
         })
     });
 
-    if(!res.ok) throw new Error("Generate API error");
+    if(!res.ok){
+        const errorData = await res.json().catch(()=>({error:"Unknown error"}));
+        throw new Error(errorData.error || errorData.details || "API request failed");
+    }
 
     const data=await res.json();
     const id=data.request_id;
-
-    let out;
-    while(true){
-        await new Promise(r=>setTimeout(r,5000));
-        const s=await fetch(`/api/status?model=${model.value}&request_id=${id}`);
-        const j=await s.json();
-        if(j.status==="FAILED") throw new Error("fal.ai request FAILED");
-        if(j.status==="COMPLETED"){ out=j.response||j; break; }
+    
+    if(!id){
+        throw new Error("No request_id returned from API");
     }
 
+    log(`⏳ Request ID: ${id} - Polling for completion...`);
+
+    let out;
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes max wait
+    
+    while(attempts < maxAttempts){
+        await new Promise(r=>setTimeout(r,5000));
+        attempts++;
+        
+        const s=await fetch(`/api/status?model=${encodeURIComponent(model.value)}&request_id=${id}`);
+        const j=await s.json();
+        
+        log(`📊 Status: ${j.status} (attempt ${attempts})`);
+        
+        if(j.status==="FAILED") throw new Error("fal.ai request FAILED");
+        if(j.status==="COMPLETED"){
+            out=j;
+            break;
+        }
+    }
+    
+    if(!out) throw new Error("Request timed out after 5 minutes");
+
     const url=out.images?.[0]?.url || out.image?.url;
+    
+    if(!url) throw new Error("No image URL in response");
+    
     gallerySection.style.display="block";
     gallery.innerHTML+=`
     <div class="gallery-item">
-    <img src="${url}">
+    <img src="${url}" alt="Generated image">
     <button class="download-btn" onclick="download('${url}',${i})">⬇️</button>
     </div>`;
 
+    log(`✅ Generated successfully`);
     done++; progressUpdate();
 }
 
