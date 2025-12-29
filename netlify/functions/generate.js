@@ -1,38 +1,27 @@
-import fetch from "node-fetch";
-import FormData from "form-data";
+const fetch = require("node-fetch");
+const FormData = require("form-data");
 
-export const handler = async (event) => {
+exports.handler = async (event) => {
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method not allowed" };
-    }
-
-    const body = JSON.parse(event.body);
-    const { model, prompt, images } = body;
-
-    if (!model || !prompt || !images?.length) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Missing inputs" }),
-      };
-    }
-
+    const { model, prompt, images } = JSON.parse(event.body);
     const apiKey = process.env.FAL_KEY;
-    if (!apiKey) throw new Error("FAL_KEY missing");
 
-    /* -------------------------------
-       1️⃣ Upload reference images
-    -------------------------------- */
+    if (!apiKey) {
+      return { statusCode: 500, body: "FAL_KEY missing" };
+    }
 
-    const uploadedUrls = [];
+    // ===============================
+    // 1️⃣ Upload reference images
+    // ===============================
+    const uploadedImages = [];
 
     for (const img of images) {
-      const buffer = Buffer.from(img.base64, "base64");
+      const buffer = Buffer.from(img.data, "base64");
 
       const form = new FormData();
       form.append("file", buffer, {
         filename: img.name,
-        contentType: img.type || "image/png",
+        contentType: img.type,
       });
 
       const uploadRes = await fetch(
@@ -49,17 +38,16 @@ export const handler = async (event) => {
 
       if (!uploadRes.ok) {
         const err = await uploadRes.text();
-        throw new Error("Image upload failed: " + err);
+        throw new Error(`Upload failed: ${err}`);
       }
 
-      const uploaded = await uploadRes.json();
-      uploadedUrls.push(uploaded.url);
+      const uploadJson = await uploadRes.json();
+      uploadedImages.push(uploadJson.file_id);
     }
 
-    /* -------------------------------
-       2️⃣ Create generation job
-    -------------------------------- */
-
+    // ===============================
+    // 2️⃣ Create generation request
+    // ===============================
     const createRes = await fetch(
       `https://queue.fal.run/${model}`,
       {
@@ -70,50 +58,50 @@ export const handler = async (event) => {
         },
         body: JSON.stringify({
           prompt,
-          images: uploadedUrls,
+          images: uploadedImages,
         }),
       }
     );
 
     if (!createRes.ok) {
       const err = await createRes.text();
-      throw new Error("Generate failed: " + err);
+      throw new Error(`Create failed: ${err}`);
     }
 
     const { request_id } = await createRes.json();
 
-    /* -------------------------------
-       3️⃣ Poll result
-    -------------------------------- */
-
+    // ===============================
+    // 3️⃣ Poll for result
+    // ===============================
     for (let i = 0; i < 120; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 5000));
 
       const pollRes = await fetch(
         `https://queue.fal.run/${model}/requests/${request_id}`,
         {
-          headers: { Authorization: `Key ${apiKey}` },
+          headers: {
+            Authorization: `Key ${apiKey}`,
+          },
         }
       );
 
-      const data = await pollRes.json();
+      const pollJson = await pollRes.json();
 
-      if (data.status === "FAILED") {
-        throw new Error(data.error || "Generation failed");
-      }
-
-      if (data.status === "COMPLETED") {
+      if (pollJson.status === "completed") {
         return {
           statusCode: 200,
-          body: JSON.stringify(data.response),
+          body: JSON.stringify(pollJson),
         };
+      }
+
+      if (pollJson.status === "failed") {
+        throw new Error(JSON.stringify(pollJson));
       }
     }
 
     throw new Error("Timeout waiting for result");
 
   } catch (err) {
-    console.error("❌ ERROR:", err);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
