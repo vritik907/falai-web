@@ -1,105 +1,57 @@
-async function generateOne(prompt, i) {
-  log("Generating: " + prompt);
+// netlify/functions/generate.js
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
 
-  /* ===============================
-     STEP 1: CALL /api/generate
-  =============================== */
-  let res;
   try {
-    const fd = new FormData();
-    fd.append("prompt", prompt);
-    fd.append("model", model.value);
-    fd.append("image_size", resolution.value);
+    const { prompt, model, image_size, image_files } = JSON.parse(event.body);
+    
+    // Build the request payload
+    const payload = {
+      prompt,
+      image_size: image_size || '1024',
+      num_inference_steps: 28,
+      guidance_scale: 3.5,
+      num_images: 1,
+      enable_safety_checker: true
+    };
 
-    // attach reference images
-    for (const f of refs) {
-      fd.append("images", f);
+    // Add reference images if provided
+    if (image_files && image_files.length > 0) {
+      payload.image_url = `data:image/png;base64,${image_files[0].base64}`;
     }
 
-    res = await fetch("/api/generate", {
-      method: "POST",
-      body: fd
+    const response = await fetch(`https://queue.fal.run/${model}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Key ${process.env.FAL_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
     });
-  } catch (e) {
-    throw new Error("Generate request failed (network)");
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('fal.ai error:', errorText);
+      return {
+        statusCode: response.status,
+        body: JSON.stringify({ error: `fal.ai API error: ${errorText}` })
+      };
+    }
+
+    const data = await response.json();
+    
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    };
+  } catch (error) {
+    console.error('Generate function error:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
   }
-
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error("Generate API error: " + t);
-  }
-
-  const data = await res.json();
-  if (!data.request_id) {
-    throw new Error("fal.ai did not return request_id");
-  }
-
-  const requestId = data.request_id;
-
-  /* ===============================
-     STEP 2: POLL /api/status SAFELY
-  =============================== */
-  const maxAttempts = 120;     // ~10 minutes
-  const pollDelay = 5000;      // 5 seconds
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await new Promise(r => setTimeout(r, pollDelay));
-
-    let statusRes;
-    try {
-      statusRes = await fetch(
-        `/api/status?model=${encodeURIComponent(model.value)}&request_id=${requestId}`
-      );
-    } catch (e) {
-      log(`Status check failed (attempt ${attempt}), retrying...`, "error");
-      continue; // do NOT fail job
-    }
-
-    if (!statusRes.ok) {
-      log(`Status API HTTP ${statusRes.status}, retrying...`, "error");
-      continue;
-    }
-
-    const j = await statusRes.json();
-
-    if (j.status === "FAILED") {
-      throw new Error(j.error || "fal.ai request FAILED");
-    }
-
-    if (j.status === "IN_QUEUE") {
-      log("In queue…");
-      continue;
-    }
-
-    if (j.status === "IN_PROGRESS") {
-      log("Processing…");
-      continue;
-    }
-
-    if (j.status === "COMPLETED") {
-      const out = j.response || j;
-      const url =
-        out.images?.[0]?.url ||
-        out.image?.url ||
-        out.output?.[0]?.url;
-
-      if (!url) {
-        throw new Error("No image URL returned");
-      }
-
-      gallerySection.style.display = "block";
-      gallery.innerHTML += `
-        <div class="gallery-item">
-          <img src="${url}">
-          <button class="download-btn" onclick="download('${url}', ${i})">⬇️</button>
-        </div>
-      `;
-
-      done++;
-      progressUpdate();
-      return;
-    }
-  }
-
-  throw new Error("Timeout waiting for fal.ai completion");
-}
+};
