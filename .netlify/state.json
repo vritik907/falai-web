@@ -1,0 +1,20 @@
+{
+	"geolocation": {
+		"data": {
+			"city": "Shimla",
+			"country": {
+				"code": "IN",
+				"name": "India"
+			},
+			"subdivision": {
+				"code": "HP",
+				"name": "Himachal Pradesh"
+			},
+			"timezone": "Asia/Kolkata",
+			"latitude": 31.1034,
+			"longitude": 77.1659,
+			"postalCode": "171009"
+		},
+		"timestamp": 1767013466461
+	}
+}

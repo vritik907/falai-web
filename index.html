@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>fal.ai Image Generator</title>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+    font-family:system-ui,Segoe UI,sans-serif;
+    background:linear-gradient(135deg,#667eea,#764ba2);
+    min-height:100vh;
+    padding:20px
+}
+.container{
+    max-width:1200px;
+    margin:auto;
+    background:#fff;
+    border-radius:20px;
+    overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.3)
+}
+.header{
+    padding:30px;
+    text-align:center;
+    color:#fff;
+    background:linear-gradient(135deg,#667eea,#764ba2)
+}
+.header h1{font-size:2.5em;margin-bottom:8px}
+.content{padding:30px}
+.section{
+    background:#f8f9fa;
+    border-radius:12px;
+    padding:20px;
+    margin-bottom:20px;
+    border:2px solid #e9ecef
+}
+.section-title{
+    font-weight:600;
+    margin-bottom:15px;
+    font-size:1.2em
+}
+label{display:block;margin-bottom:6px;color:#555}
+input,select,textarea{
+    width:100%;
+    padding:12px;
+    border-radius:8px;
+    border:2px solid #ddd;
+    font-size:14px
+}
+textarea{min-height:120px;font-family:monospace}
+.settings-row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:15px
+}
+.btn{
+    width:100%;
+    padding:15px;
+    font-size:16px;
+    border:none;
+    border-radius:10px;
+    background:linear-gradient(135deg,#667eea,#764ba2);
+    color:#fff;
+    font-weight:600;
+    cursor:pointer
+}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.logs{
+    display:none;
+    background:#111;
+    color:#0f0;
+    padding:15px;
+    border-radius:10px;
+    font-family:monospace;
+    max-height:250px;
+    overflow:auto
+}
+.gallery{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+    gap:20px
+}
+.gallery-item{
+    position:relative;
+    border-radius:12px;
+    overflow:hidden;
+    box-shadow:0 4px 10px rgba(0,0,0,.15)
+}
+.gallery-item img{
+    width:100%;
+    height:250px;
+    object-fit:cover
+}
+.download-btn{
+    position:absolute;
+    bottom:10px;
+    right:10px;
+    background:rgba(0,0,0,.7);
+    color:#fff;
+    border:none;
+    padding:8px 12px;
+    border-radius:6px;
+    cursor:pointer
+}
+.file-label{
+    border:2px dashed #667eea;
+    padding:14px;
+    text-align:center;
+    border-radius:10px;
+    cursor:pointer;
+    background:#fff
+}
+.image-item{
+    display:flex;
+    justify-content:space-between;
+    background:#fff;
+    padding:8px;
+    border-radius:6px;
+    margin-top:6px
+}
+.remove-btn{
+    background:#ff4444;
+    border:none;
+    color:#fff;
+    padding:4px 8px;
+    border-radius:4px;
+    cursor:pointer
+}
+.progress{
+    display:none;
+    margin-top:15px
+}
+.progress-bar{
+    background:#eee;
+    height:26px;
+    border-radius:13px;
+    overflow:hidden
+}
+.progress-fill{
+    height:100%;
+    background:linear-gradient(90deg,#667eea,#764ba2);
+    color:#fff;
+    text-align:center;
+    font-weight:600;
+    width:0%
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+<div class="header">
+<h1>🎨 fal.ai Image Generator</h1>
+<p>Secure Netlify deployment (Client-Safe)</p>
+</div>
+
+<div class="content">
+
+<div class="section">
+<div class="section-title">⚙️ Model</div>
+<input id="model" value="fal-ai/nano-banana-pro/edit"/>
+</div>
+
+<div class="section">
+<div class="section-title">⚙️ Settings</div>
+<div class="settings-row">
+<select id="aspect">
+<option value="auto">Auto</option>
+<option value="1:1">1:1</option>
+<option value="16:9">16:9</option>
+<option value="9:16">9:16</option>
+</select>
+<select id="resolution">
+<option value="512">512</option>
+<option value="1024" selected>1024</option>
+<option value="2048">2048</option>
+</select>
+</div>
+</div>
+
+<div class="section">
+<div class="section-title">🖼️ Reference Images</div>
+<input type="file" id="fileInput" multiple accept="image/*" hidden>
+<label for="fileInput" class="file-label">Click to add images</label>
+<div id="imageList"></div>
+</div>
+
+<div class="section">
+<div class="section-title">📝 Prompts (one per line)</div>
+<textarea id="prompts"></textarea>
+</div>
+
+<button class="btn" id="generateBtn" onclick="generateImages()">🚀 Generate</button>
+
+<div class="progress" id="progress">
+<div class="progress-bar">
+<div class="progress-fill" id="progressFill">0%</div>
+</div>
+</div>
+
+<div class="logs" id="logs"></div>
+
+<div class="section" id="gallerySection" style="display:none">
+<div class="section-title">🎨 Results</div>
+<div class="gallery" id="gallery"></div>
+</div>
+
+</div>
+</div>
+
+<script>
+let refs=[],total=0,done=0;
+const promptsEl=document.getElementById("prompts");
+
+fileInput.onchange=e=>{
+    [...e.target.files].forEach(f=>{
+        refs.push(f);
+        imageList.innerHTML+=`
+        <div class="image-item">${f.name}
+        <button class="remove-btn" onclick="removeImage('${f.name}')">X</button>
+        </div>`;
+    })
+}
+
+function removeImage(n){
+    refs=refs.filter(f=>f.name!==n);
+    imageList.innerHTML="";
+    refs.forEach(f=>imageList.innerHTML+=`
+    <div class="image-item">${f.name}
+    <button class="remove-btn" onclick="removeImage('${f.name}')">X</button>
+    </div>`);
+}
+
+function log(msg){
+    logs.style.display="block";
+    logs.innerHTML+=`<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+    logs.scrollTop=logs.scrollHeight;
+}
+
+function progressUpdate(){
+    let p=Math.round(done/total*100);
+    progressFill.style.width=p+"%";
+    progressFill.textContent=`${done}/${total}`;
+}
+
+async function generateImages(){
+    const prompts=promptsEl.value.split("\n").map(x=>x.trim()).filter(Boolean);
+    if(!prompts.length) return alert("Add prompt");
+
+    if(model.value.includes("edit") && refs.length===0){
+        alert("This model requires reference images");
+        return;
+    }
+
+    total=prompts.length; done=0;
+    gallery.innerHTML="";
+    logs.innerHTML="";
+    gallerySection.style.display="none";
+    progress.style.display="block";
+    generateBtn.disabled=true;
+
+    for(let i=0;i<prompts.length;i++){
+        try{
+            await generateOne(prompts[i],i);
+        }catch(err){
+            log(err.message);
+            done++; progressUpdate();
+        }
+    }
+
+    generateBtn.disabled=false;
+    log("🎉 All requests finished");
+}
+
+async function generateOne(prompt,i){
+    log("Generating: "+prompt);
+
+    const imageFiles=[];
+    for(const f of refs){
+        const base64=await new Promise(res=>{
+            const r=new FileReader();
+            r.onload=()=>res(r.result.split(",")[1]);
+            r.readAsDataURL(f);
+        });
+        imageFiles.push({name:f.name,base64});
+    }
+
+    const res=await fetch("/api/generate",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            prompt,
+            model:model.value,
+            image_size:resolution.value,
+            image_files:imageFiles
+        })
+    });
+
+    if(!res.ok) throw new Error("Generate API error");
+
+    const data=await res.json();
+    const id=data.request_id;
+
+    let out;
+    while(true){
+        await new Promise(r=>setTimeout(r,2000));
+        const s=await fetch(`/api/status?model=${model.value}&request_id=${id}`);
+        const j=await s.json();
+        if(j.status==="FAILED") throw new Error("fal.ai request FAILED");
+        if(j.status==="COMPLETED"){ out=j.response||j; break; }
+    }
+
+    const url=out.images?.[0]?.url || out.image?.url;
+    gallerySection.style.display="block";
+    gallery.innerHTML+=`
+    <div class="gallery-item">
+    <img src="${url}">
+    <button class="download-btn" onclick="download('${url}',${i})">⬇️</button>
+    </div>`;
+
+    done++; progressUpdate();
+}
+
+function download(u,i){
+    const a=document.createElement("a");
+    a.href=u; a.download=`image_${i+1}.png`; a.click();
+}
+</script>
+</body>
+</html>
